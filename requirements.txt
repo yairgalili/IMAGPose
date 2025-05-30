@@ -19,7 +19,7 @@ hjson
 huggingface-hub
 idna
 importlib_metadata
-Jinja
+Jinja2
 MarkupSafe
 mpmath
 multidict
