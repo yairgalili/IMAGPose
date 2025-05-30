@@ -62,7 +62,7 @@ transformers
 triton
 typing_extensions
 tzdata
-urllib
+urllib3
 xxhash
 yarl
 zipp
