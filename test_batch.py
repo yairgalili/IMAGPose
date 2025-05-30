@@ -3,52 +3,59 @@ from datetime import datetime
 from pathlib import Path
 import torch
 from diffusers import AutoencoderKL, DDIMScheduler
-from einops import repeat
 from omegaconf import OmegaConf
 from PIL import Image
 from torchvision import transforms
 
 from models.unet_3d import UNet3DConditionModel
 from models.pose_guider import PoseGuider
-from train_stage1_vae_clip import PatchEmbedding
+from train_stage1 import PatchEmbedding
 
 from pipeline.pipeline_pose2img import Pose2ImagePipeline
 
 import json
-from einops import rearrange, repeat
-import numpy as np
+from einops import rearrange
 import random
 from transformers import Dinov2Model
 
-def big2small_image(big_img): # b, h,w, c
+
+def big2small_image(big_img):  # b, h,w, c
     big_img = rearrange(big_img, "b h w c -> b c h w")
 
     bs, _, height, width = big_img.shape
-    image1 = big_img[:, :, :height//2 , :width//2]
-    image2 = big_img[:, :, :height//2, width//2:]
-    image3 = big_img[:, :, height//2:, :width//2]
-    image4 = big_img[:, :, height//2:, width//2:]
+    image1 = big_img[:, :, : height // 2, : width // 2]
+    image2 = big_img[:, :, : height // 2, width // 2 :]
+    image3 = big_img[:, :, height // 2 :, : width // 2]
+    image4 = big_img[:, :, height // 2 :, width // 2 :]
 
-    batch_image = torch.stack([image1, image2, image3, image4], dim=0) # f, b, c, h, w
+    batch_image = torch.stack([image1, image2, image3, image4], dim=0)  # f, b, c, h, w
     batch_image = rearrange(batch_image, "f b c h w -> b c f h w")
     return batch_image
 
 
-
-def concat_big_img(img_list,  width, height,):
+def concat_big_img(
+    img_list,
+    width,
+    height,
+):
     scale_transform = transforms.Compose(
-            [
-                transforms.Resize((height, width)),
-            ]
-        )
-    img1, img2, img3, img4 = scale_transform(img_list[0]), scale_transform(img_list[1]), scale_transform(img_list[2]), scale_transform(img_list[3])
+        [
+            transforms.Resize((height, width)),
+        ]
+    )
+    img1, img2, img3, img4 = (
+        scale_transform(img_list[0]),
+        scale_transform(img_list[1]),
+        scale_transform(img_list[2]),
+        scale_transform(img_list[3]),
+    )
 
     width, height = img1.size
 
-    if  len(img1.getbands()) == 1:
-        final_image = Image.new('L', (width * 2, height * 2))
+    if len(img1.getbands()) == 1:
+        final_image = Image.new("L", (width * 2, height * 2))
     else:
-        final_image = Image.new('RGB', (width * 2, height * 2))
+        final_image = Image.new("RGB", (width * 2, height * 2))
 
     # 拼接图像
     final_image.paste(img1, (0, 0))
@@ -75,6 +82,7 @@ def image_grid(imgs, rows, cols):
         grid.paste(img, box=(i % cols * w, i // cols * h))
     return grid
 
+
 def parse_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--config", default="./configs/prompts/test_end2end.yaml")
@@ -85,13 +93,31 @@ def parse_args():
     parser.add_argument("--cfg", type=float, default=2.0)
     parser.add_argument("--steps", type=int, default=30)
     parser.add_argument("--fps", type=int)
-    parser.add_argument("--base_root", type=str,default='./data/test_demo')
-    parser.add_argument("--test_json", type=str, default='./data/test_demo/test.json')
-    parser.add_argument("--save_dir_name", type=str,default='./all_logs/test_batch_results')
-    parser.add_argument("--denoising_unet_path", type=str, default='./all_logs/stage3_end2end/stage3_end2end_log/denoising_unet-50001.pth')
-    parser.add_argument("--pose_guider_path", type=str, default='./all_logs/stage3_end2end/stage3_end2end_log/pose_guider-50001.pth')
-    parser.add_argument("--patch_path", type=str, default='./all_logs/stage3_end2end/stage3_end2end_log/patch-50001.pth')
-    parser.add_argument("--motion_module_path", type=str, default='./all_logs/stage3_end2end/stage3_end2end_log/motion_module-50001.pth')
+    parser.add_argument("--base_root", type=str, default="./data/test_demo")
+    parser.add_argument("--test_json", type=str, default="./data/test_demo/test.json")
+    parser.add_argument(
+        "--save_dir_name", type=str, default="./all_logs/test_batch_results"
+    )
+    parser.add_argument(
+        "--denoising_unet_path",
+        type=str,
+        default="./all_logs/stage3_end2end/stage3_end2end_log/denoising_unet-50001.pth",
+    )
+    parser.add_argument(
+        "--pose_guider_path",
+        type=str,
+        default="./all_logs/stage3_end2end/stage3_end2end_log/pose_guider-50001.pth",
+    )
+    parser.add_argument(
+        "--patch_path",
+        type=str,
+        default="./all_logs/stage3_end2end/stage3_end2end_log/patch-50001.pth",
+    )
+    parser.add_argument(
+        "--motion_module_path",
+        type=str,
+        default="./all_logs/stage3_end2end/stage3_end2end_log/motion_module-50001.pth",
+    )
     args = parser.parse_args()
 
     return args
@@ -119,7 +145,6 @@ def main():
     vae = AutoencoderKL.from_pretrained(
         config.pretrained_vae_path,
     ).to("cuda", dtype=weight_dtype)
-
 
     inference_config_path = config.inference_config
     infer_config = OmegaConf.load(inference_config_path)
@@ -180,10 +205,9 @@ def main():
     save_dir = Path(f"{base_root}/{date_str}/{save_dir_name}")
     save_dir.mkdir(exist_ok=True, parents=True)
 
-    datas = json.load(open(args.test_json,'r'))
+    datas = json.load(open(args.test_json, "r"))
 
     for i in range(len(datas)):
-
         batch_person_path = [random.choice(datas[i]) for _ in range(4)]
         image_path = [random.choice(batch_person_path) for _ in range(1)][0]
 
@@ -192,13 +216,19 @@ def main():
         pose_pil_image_list = []
 
         for person_path in batch_person_path:
-            pose_pil_image_list.append(Image.open(person_path.replace('/image/', '/dwpose/')).convert("RGB"))
+            pose_pil_image_list.append(
+                Image.open(person_path.replace("/image/", "/dwpose/")).convert("RGB")
+            )
             person_pil_image_list.append(Image.open(person_path).convert("RGB"))
-
 
         ref_img_pil = person_pil_image_list[0]
         black_img_pil = Image.new("RGB", (args.W, args.H), (0, 0, 0))
-        image_mask_pil_image_list = [ref_img_pil, black_img_pil, black_img_pil, black_img_pil]
+        image_mask_pil_image_list = [
+            ref_img_pil,
+            black_img_pil,
+            black_img_pil,
+            black_img_pil,
+        ]
 
         image_mask_big_image = concat_big_img(image_mask_pil_image_list, args.W, args.H)
 
@@ -209,30 +239,29 @@ def main():
         pixel_values_pose = transforms.ToTensor()(pose_pil_big_image)
 
         # setting flag label
-        white1 = Image.new("L", (args.W //8, args.H//8), 255)
-        black0 = Image.new("L", (args.W//8, args.H//8), 0)
+        white1 = Image.new("L", (args.W // 8, args.H // 8), 255)
+        black0 = Image.new("L", (args.W // 8, args.H // 8), 0)
         flag_label = [white1, black0, black0, black0]
-        flag_label_mask_big_image = concat_big_img(flag_label, args.W//8, args.H//8)
+        flag_label_mask_big_image = concat_big_img(flag_label, args.W // 8, args.H // 8)
         pixel_values_flag_label = transforms.ToTensor()(flag_label_mask_big_image)
 
-
-
-
         image = pipe(
-            ref_image = ref_img_pil,
-            pose_image =pixel_values_pose,
-            image_mask = pixel_values_image_mask,
-            flag_label = pixel_values_flag_label,
-            width = width*2,
-            height = height*2,
-            num_inference_steps = args.steps,
-            guidance_scale = args.cfg,
+            ref_image=ref_img_pil,
+            pose_image=pixel_values_pose,
+            image_mask=pixel_values_image_mask,
+            flag_label=pixel_values_flag_label,
+            width=width * 2,
+            height=height * 2,
+            num_inference_steps=args.steps,
+            guidance_scale=args.cfg,
             generator=generator,
         ).images  # b,h,w,c
 
-
         grid = image_grid(image, 1, 1)
-        grid.save(f"{save_dir}/{image_path.split('/')[-1]}{args.H}x{args.W}_{int(args.cfg)}_{time_str}.png")
+        grid.save(
+            f"{save_dir}/{image_path.split('/')[-1]}{args.H}x{args.W}_{int(args.cfg)}_{time_str}.png"
+        )
+
 
 if __name__ == "__main__":
     main()
