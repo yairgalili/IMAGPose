@@ -48,7 +48,7 @@ pyarrow-hotfix
 pydantic
 pydantic_core
 pynvml
-python-dateutilpost
+python-dateutil
 pytz
 PyYAML
 regex
