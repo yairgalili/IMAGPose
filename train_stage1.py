@@ -1,5 +1,4 @@
 import argparse
-import copy
 import logging
 import math
 import os
@@ -7,10 +6,7 @@ import os.path as osp
 import random
 import time
 import warnings
-from collections import OrderedDict
 from datetime import datetime
-from pathlib import Path
-from tempfile import TemporaryDirectory
 
 import diffusers
 import mlflow
@@ -28,13 +24,11 @@ from diffusers.utils import check_min_version
 from diffusers.utils.import_utils import is_xformers_available
 from einops import rearrange
 from omegaconf import OmegaConf
-from PIL import Image
-from torchvision import transforms
 from tqdm.auto import tqdm
 from diffusers.models.modeling_utils import ModelMixin
-from transformers import CLIPVisionModelWithProjection
 from transformers import Dinov2Model
-from pose_DeepFashion_dataset import HumanPoseDataset
+from pose_dataset import HumanPoseDataset
+
 # from models.mutual_self_attention import ReferenceAttentionControl
 from models.pose_guider import PoseGuider
 from models.unet_2d_condition import UNet2DConditionModel
@@ -55,7 +49,9 @@ logger = get_logger(__name__, log_level="INFO")
 class PatchEmbedding(ModelMixin):
     def __init__(self, patch_size, in_chans, embed_dim):
         super().__init__()
-        self.proj = nn.Conv2d(in_chans, embed_dim, kernel_size=patch_size, stride=patch_size)
+        self.proj = nn.Conv2d(
+            in_chans, embed_dim, kernel_size=patch_size, stride=patch_size
+        )
 
     def forward(self, x):
         x = self.proj(x)  # (B, E, H, W)
@@ -63,22 +59,35 @@ class PatchEmbedding(ModelMixin):
 
 
 class Net(nn.Module):
-    def __init__( self, denoising_unet: UNet3DConditionModel, pose_guider: PoseGuider, patch,):
+    def __init__(
+        self,
+        denoising_unet: UNet3DConditionModel,
+        pose_guider: PoseGuider,
+        patch,
+    ):
         super().__init__()
 
         self.denoising_unet = denoising_unet
         self.pose_guider = pose_guider
         self.patch = patch
 
-    def forward( self, noisy_latents, timesteps, clip_image_embeds, pose_img, ref_latents):
+    def forward(
+        self, noisy_latents, timesteps, clip_image_embeds, pose_img, ref_latents
+    ):
+        pose_fea = self.pose_guider(pose_img)  # [1, 320, 192, 128]
 
-        pose_fea = self.pose_guider(pose_img) #[1, 320, 192, 128]
+        patch_ref_latents = self.patch(ref_latents)  # bs, 4, 96, 64 - > bs, 24, 768
 
-        patch_ref_latents = self.patch(ref_latents) #bs, 4, 96, 64 - > bs, 24, 768
+        clip_vae_embeds = torch.cat(
+            [clip_image_embeds, patch_ref_latents], dim=1
+        )  # bs, (257+24), 768
 
-        clip_vae_embeds = torch.cat([clip_image_embeds, patch_ref_latents], dim=1)  # bs, (257+24), 768
-
-        model_pred = self.denoising_unet(noisy_latents, timesteps, pose_cond_fea=pose_fea,encoder_hidden_states=clip_vae_embeds).sample
+        model_pred = self.denoising_unet(
+            noisy_latents,
+            timesteps,
+            pose_cond_fea=pose_fea,
+            encoder_hidden_states=clip_vae_embeds,
+        ).sample
 
         return model_pred
 
@@ -111,9 +120,6 @@ def compute_snr(noise_scheduler, timesteps):
     # Compute SNR.
     snr = (alpha / sigma) ** 2
     return snr
-
-
-
 
 
 def main(cfg):
@@ -170,7 +176,6 @@ def main(cfg):
     sched_kwargs.update({"beta_schedule": "scaled_linear"})
     train_noise_scheduler = DDIMScheduler(**sched_kwargs)
 
-
     image_enc = Dinov2Model.from_pretrained(
         cfg.image_encoder_path,
     ).to(dtype=weight_dtype, device="cuda")
@@ -178,21 +183,21 @@ def main(cfg):
         "cuda", dtype=weight_dtype
     )
 
-
     denoising_unet = UNet2DConditionModel.from_pretrained(
         cfg.base_model_path,
         subfolder="unet",
-        in_channels=9, low_cpu_mem_usage=False, ignore_mismatched_sizes=True,
+        in_channels=9,
+        low_cpu_mem_usage=False,
+        ignore_mismatched_sizes=True,
     ).to(device="cuda", dtype=weight_dtype)
-
 
     pose_guider = PoseGuider(
         conditioning_embedding_channels=320, block_out_channels=(16, 32, 96, 256)
     ).to(device="cuda", dtype=weight_dtype)
 
-    patch =PatchEmbedding(patch_size=16, in_chans=4, embed_dim=768).to(device="cuda", dtype=weight_dtype)
-
-
+    patch = PatchEmbedding(patch_size=16, in_chans=4, embed_dim=768).to(
+        device="cuda", dtype=weight_dtype
+    )
 
     # Freeze
     vae.requires_grad_(False)
@@ -200,7 +205,6 @@ def main(cfg):
     patch.requires_grad_(True)
     pose_guider.requires_grad_(True)
     denoising_unet.requires_grad_(True)
-
 
     net = Net(
         denoising_unet,
@@ -340,13 +344,11 @@ def main(cfg):
         dirs = sorted(dirs, key=lambda x: int(x.split("-")[1]))
         path = dirs[-1]
 
-
         accelerator.load_state(os.path.join(resume_dir, path))
         accelerator.print(f"Resuming from checkpoint {path}")
         global_step = int(path.split("-")[1])
 
         first_epoch = global_step // num_update_steps_per_epoch
-
 
     # Only show the progress bar once on each machine.
     progress_bar = tqdm(
@@ -362,26 +364,35 @@ def main(cfg):
             t_data = time.time() - t_data_start
             with accelerator.accumulate(net):
                 # Convert videos to latent space
-                pixel_values_vid = batch["pixel_values_person"].to(weight_dtype) # b, c, 2h, 2w,
-                pixel_values_image_mask = batch["pixel_values_image_mask"].to(weight_dtype) # b, c, 2h, 2w,
+                pixel_values_vid = batch["pixel_values_person"].to(
+                    weight_dtype
+                )  # b, c, 2h, 2w,
+                pixel_values_image_mask = batch["pixel_values_image_mask"].to(
+                    weight_dtype
+                )  # b, c, 2h, 2w,
                 vae_ref_img = batch["vae_ref_img"].to(weight_dtype)
                 with torch.no_grad():
-
-                    latents = vae.encode(pixel_values_vid).latent_dist.sample() # b,4,2h/8,2w/8
+                    latents = vae.encode(
+                        pixel_values_vid
+                    ).latent_dist.sample()  # b,4,2h/8,2w/8
                     latents = latents * 0.18215
 
                     # Get the masked image latents: Image + black concatenation
-                    masked_latents = vae.encode(pixel_values_image_mask).latent_dist.sample()# b,4,2h/8,2w/8
+                    masked_latents = vae.encode(
+                        pixel_values_image_mask
+                    ).latent_dist.sample()  # b,4,2h/8,2w/8
                     masked_latents = masked_latents * 0.18215
 
                     # Get the ref image latents
-                    ref_latents = vae.encode(vae_ref_img).latent_dist.sample() # b,4,h/8, w/8
+                    ref_latents = vae.encode(
+                        vae_ref_img
+                    ).latent_dist.sample()  # b,4,h/8, w/8
                     ref_latents = ref_latents * 0.18215
 
                 noise = torch.randn_like(latents)
                 if cfg.noise_offset > 0:
                     noise += cfg.noise_offset * torch.randn(
-                        (latents.shape[0], latents.shape[1],  1, 1),
+                        (latents.shape[0], latents.shape[1], 1, 1),
                         device=latents.device,
                     )
                 bsz = latents.shape[0]
@@ -394,20 +405,20 @@ def main(cfg):
                 )
                 timesteps = timesteps.long()
 
-                pixel_values_pose = batch["pixel_values_pose"].to(device="cuda", dtype=weight_dtype)  # (bs, c, H, W)
+                pixel_values_pose = batch["pixel_values_pose"].to(
+                    device="cuda", dtype=weight_dtype
+                )  # (bs, c, H, W)
 
                 uncond_fwd = random.random() < cfg.uncond_ratio
                 clip_image_list = []
 
-                for batch_idx, (clip_img) in enumerate (batch["clip_ref_img"]):
+                for batch_idx, (clip_img) in enumerate(batch["clip_ref_img"]):
                     if uncond_fwd:
                         clip_image_list.append(torch.zeros_like(clip_img))
                     else:
                         clip_image_list.append(clip_img)
 
-
                 with torch.no_grad():
-
                     clip_img = torch.stack(clip_image_list, dim=0).to(
                         dtype=image_enc.dtype, device=image_enc.device
                     )
@@ -417,10 +428,16 @@ def main(cfg):
                     ).last_hidden_state  # (bs, 257, d)
 
                 # add noise
-                noisy_latents = train_noise_scheduler.add_noise(latents, noise, timesteps)
+                noisy_latents = train_noise_scheduler.add_noise(
+                    latents, noise, timesteps
+                )
                 # 9 channel input
-                pixel_values_flag_label = batch["pixel_values_flag_label"].to(accelerator.device,dtype=weight_dtype)  # b, c, f, 2h/8, 2w/8,
-                noisy_latents = torch.cat([noisy_latents, pixel_values_flag_label, masked_latents], dim=1)
+                pixel_values_flag_label = batch["pixel_values_flag_label"].to(
+                    accelerator.device, dtype=weight_dtype
+                )  # b, c, f, 2h/8, 2w/8,
+                noisy_latents = torch.cat(
+                    [noisy_latents, pixel_values_flag_label, masked_latents], dim=1
+                )
                 # Get the target for loss depending on the prediction type
                 if train_noise_scheduler.prediction_type == "epsilon":
                     target = noise
@@ -486,7 +503,6 @@ def main(cfg):
                 global_step += 1
                 accelerator.log({"train_loss": train_loss}, step=global_step)
                 train_loss = 0.0
-
 
             logs = {
                 "step_loss": loss.detach().item(),
