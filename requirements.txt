@@ -67,3 +67,4 @@ xxhash
 yarl
 zipp
 mlflow
+decord
