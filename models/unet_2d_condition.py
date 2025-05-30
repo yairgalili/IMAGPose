@@ -20,13 +20,22 @@ from diffusers.models.embeddings import (
     ImageHintTimeEmbedding,
     ImageProjection,
     ImageTimeEmbedding,
-    PositionNet,
+    # PositionNet,
     TextImageProjection,
     TextImageTimeEmbedding,
     TextTimeEmbedding,
     TimestepEmbedding,
     Timesteps,
 )
+import diffusers
+
+if diffusers.__version__ > "0.25":
+    from diffusers.models.embeddings import (
+        GLIGENTextBoundingboxProjection as PositionNet,
+    )
+else:
+    from diffusers.models.embeddings import PositionNet
+
 from diffusers.models.modeling_utils import ModelMixin
 from diffusers.utils import (
     USE_PEFT_BACKEND,
@@ -1194,9 +1203,9 @@ class UNet2DConditionModel(ModelMixin, ConfigMixin, UNet2DConditionLoadersMixin)
                 # For t2i-adapter CrossAttnDownBlock2D
                 additional_residuals = {}
                 if is_adapter and len(down_intrablock_additional_residuals) > 0:
-                    additional_residuals[
-                        "additional_residuals"
-                    ] = down_intrablock_additional_residuals.pop(0)
+                    additional_residuals["additional_residuals"] = (
+                        down_intrablock_additional_residuals.pop(0)
+                    )
 
                 sample, res_samples = downsample_block(
                     hidden_states=sample,
