@@ -68,3 +68,6 @@ yarl
 zipp
 mlflow
 decord
+av
+controlnet_aux
+onnxruntime
