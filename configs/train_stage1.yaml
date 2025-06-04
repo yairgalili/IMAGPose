@@ -41,7 +41,7 @@ noise_scheduler_kwargs:
   clip_sample:         false
 
 base_model_path: './weights/stable-diffusion-v1-5'
-vae_model_path: './weights/sd-vae-ft-mse/'
+vae_model_path: 'stabilityai/sd-vae-ft-mse'
 image_encoder_path: './weights/dinov2-base'
 mm_path: './weights/Moore-AnimateAnyone/pretrained_weights/motion_module.pth' # ckpt -> pth
 
